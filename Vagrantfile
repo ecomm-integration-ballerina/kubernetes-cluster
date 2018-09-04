@@ -30,13 +30,19 @@ servers = [
 
 # This script to install k8s using kubeadm will get executed after a box is provisioned
 $script = <<-SCRIPT
+
+    # install docker v17.03
+    # reason for not using docker provision is that it always installs latest version of the docker, but kubeadm requires 17.03 or older
     apt-get update
     apt-get install -y apt-transport-https ca-certificates curl software-properties-common
     curl -fsSL https://download.docker.com/linux/ubuntu/gpg | apt-key add -
     add-apt-repository "deb https://download.docker.com/linux/$(. /etc/os-release; echo "$ID") $(lsb_release -cs) stable"
     apt-get update && apt-get install -y docker-ce=$(apt-cache madison docker-ce | grep 17.03 | head -1 | awk '{print $3}')
+
+    # run docker commands as vagrant user (sudo not required)
     usermod -aG docker vagrant
 
+    # install kubeadm
     apt-get install -y apt-transport-https curl
     curl -s https://packages.cloud.google.com/apt/doc/apt-key.gpg | apt-key add -
     cat <<EOF >/etc/apt/sources.list.d/kubernetes.list
@@ -45,6 +51,30 @@ EOF
     apt-get update
     apt-get install -y kubelet kubeadm kubectl
     apt-mark hold kubelet kubeadm kubectl
+
+    # kubelet requires swap off
+    swapoff -a
+
+    # keep swap off after reboot
+    sudo sed -i '/ swap / s/^\(.*\)$/#\1/g' /etc/fstab
+
+    # configure docker as the cgroup driver
+    sed -i '0,/ExecStart=/s//Environment="KUBELET_EXTRA_ARGS=--cgroup-driver=cgroupfs"\n&/' /etc/systemd/system/kubelet.service.d/10-kubeadm.conf
+
+    # ip of this box
+    IPADDR=`ifconfig enp0s8 | grep Mask | awk '{print $2}'| cut -f2 -d:`
+    echo This VM has IP address $IPADDR
+
+    # install k8s master
+    NODENAME=$(hostname -s)
+    kubeadm init --apiserver-cert-extra-sans=$IPADDR  --node-name $NODENAME
+
+    #copying credentials to regular user - vagrant
+    sudo --user=vagrant mkdir -p /home/vagrant/.kube
+    cp -i /etc/kubernetes/admin.conf /home/vagrant/.kube/config
+    chown $(id -u vagrant):$(id -g vagrant) /home/vagrant/.kube/config
+
+    
 
 SCRIPT
 
