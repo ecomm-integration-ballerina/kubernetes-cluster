@@ -74,7 +74,9 @@ EOF
     cp -i /etc/kubernetes/admin.conf /home/vagrant/.kube/config
     chown $(id -u vagrant):$(id -g vagrant) /home/vagrant/.kube/config
 
-    
+    # install weave pod network addon
+    export KUBECONFIG=/etc/kubernetes/admin.conf
+    kubectl apply -f "https://cloud.weave.works/k8s/net?k8s-version=$(kubectl version | base64 | tr -d '\n')"
 
 SCRIPT
 
