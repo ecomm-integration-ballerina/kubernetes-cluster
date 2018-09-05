@@ -3,7 +3,8 @@
 
 servers = [
     {
-        :name => "k8s-master",
+        :name => "k8s-head",
+        :type => "master",
         :box => "ubuntu/xenial64",
         :box_version => "20180831.0.0",
         :eth1 => "192.168.205.10",
@@ -12,6 +13,7 @@ servers = [
     },
     {
         :name => "k8s-node-1",
+        :type => "node",
         :box => "ubuntu/xenial64",
         :box_version => "20180831.0.0",
         :eth1 => "192.168.205.11",
@@ -20,6 +22,7 @@ servers = [
     },
     {
         :name => "k8s-node-2",
+        :type => "node",
         :box => "ubuntu/xenial64",
         :box_version => "20180831.0.0",
         :eth1 => "192.168.205.12",
@@ -29,7 +32,7 @@ servers = [
 ]
 
 # This script to install k8s using kubeadm will get executed after a box is provisioned
-$script = <<-SCRIPT
+$configureBox = <<-SCRIPT
 
     # install docker v17.03
     # reason for not using docker provision is that it always installs latest version of the docker, but kubeadm requires 17.03 or older
@@ -58,26 +61,36 @@ EOF
     # keep swap off after reboot
     sudo sed -i '/ swap / s/^\(.*\)$/#\1/g' /etc/fstab
 
+SCRIPT
+
+$configureMaster = <<-SCRIPT
+    echo "This is master"
+
     # configure docker as the cgroup driver
     sed -i '0,/ExecStart=/s//Environment="KUBELET_EXTRA_ARGS=--cgroup-driver=cgroupfs"\n&/' /etc/systemd/system/kubelet.service.d/10-kubeadm.conf
 
     # ip of this box
     IPADDR=`ifconfig enp0s8 | grep Mask | awk '{print $2}'| cut -f2 -d:`
-    echo This VM has IP address $IPADDR
 
     # install k8s master
     NODENAME=$(hostname -s)
-    kubeadm init --apiserver-cert-extra-sans=$IPADDR  --node-name $NODENAME
+    kubeadm init --apiserver-advertise-address=$IPADDR --apiserver-cert-extra-sans=$IPADDR  --node-name $NODENAME --pod-network-cidr=192.168.0.0/16
 
     #copying credentials to regular user - vagrant
     sudo --user=vagrant mkdir -p /home/vagrant/.kube
     cp -i /etc/kubernetes/admin.conf /home/vagrant/.kube/config
     chown $(id -u vagrant):$(id -g vagrant) /home/vagrant/.kube/config
 
-    # install weave pod network addon
+    # install Calico pod network addon
     export KUBECONFIG=/etc/kubernetes/admin.conf
-    kubectl apply -f "https://cloud.weave.works/k8s/net?k8s-version=$(kubectl version | base64 | tr -d '\n')"
+    kubectl apply -f https://docs.projectcalico.org/v3.1/getting-started/kubernetes/installation/hosted/rbac-kdd.yaml
+    kubectl apply -f https://docs.projectcalico.org/v3.1/getting-started/kubernetes/installation/hosted/kubernetes-datastore/calico-networking/1.7/calico.yaml
 
+    kubeadm token create --print-join-command >> /etc/kubeadm_tokens.txt
+SCRIPT
+
+$configureNode = <<-SCRIPT
+    echo "This is worker"
 SCRIPT
 
 Vagrant.configure("2") do |config|
@@ -102,7 +115,13 @@ Vagrant.configure("2") do |config|
             # we cannot use this because we can't install the docker version we want - https://github.com/hashicorp/vagrant/issues/4871
             #config.vm.provision "docker"
 
-            config.vm.provision "shell", inline: $script
+            config.vm.provision "shell", inline: $configureBox
+
+            if opts[:type] == "master"
+                config.vm.provision "shell", inline: $configureMaster
+            else
+                config.vm.provision "shell", inline: $configureNode
+            end
 
         end
 
