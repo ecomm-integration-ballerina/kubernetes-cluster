@@ -66,9 +66,6 @@ SCRIPT
 $configureMaster = <<-SCRIPT
     echo "This is master"
 
-    # configure docker as the cgroup driver
-    sed -i '0,/ExecStart=/s//Environment="KUBELET_EXTRA_ARGS=--cgroup-driver=cgroupfs"\n&/' /etc/systemd/system/kubelet.service.d/10-kubeadm.conf
-
     # ip of this box
     IPADDR=`ifconfig enp0s8 | grep Mask | awk '{print $2}'| cut -f2 -d:`
 
