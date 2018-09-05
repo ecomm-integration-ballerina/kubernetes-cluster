@@ -62,7 +62,9 @@ EOF
     sudo sed -i '/ swap / s/^\(.*\)$/#\1/g' /etc/fstab
 
     # generate ssh keys
-    ssh-keygen -f $HOME/.ssh/id_rsa -t rsa -N ''
+    ssh-keygen -f /home/vagrant/.ssh/id_rsa -t rsa -N ''
+    chown vagrant:vagrant id_rsa
+    chown vagrant:vagrant id_rsa.pub
 
 SCRIPT
 
@@ -99,7 +101,7 @@ $configureNode = <<-SCRIPT
 
     # add worker's public key to master's authorized keys for password-less ssh
     apt-get install -y sshpass
-    sshpass -p "vagrant" ssh-copy-id -i $HOME/.ssh/id_rsa.pub vagrant@192.168.205.10
+    sshpass -p "vagrant" ssh-copy-id -i /home/vagrant/.ssh/id_rsa.pub vagrant@192.168.205.10
 SCRIPT
 
 Vagrant.configure("2") do |config|
