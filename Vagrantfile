@@ -61,6 +61,9 @@ EOF
     # keep swap off after reboot
     sudo sed -i '/ swap / s/^\(.*\)$/#\1/g' /etc/fstab
 
+    # generate ssh keys
+    ssh-keygen -f $HOME/.ssh/id_rsa -t rsa -N ''
+
 SCRIPT
 
 $configureMaster = <<-SCRIPT
@@ -83,11 +86,20 @@ $configureMaster = <<-SCRIPT
     kubectl apply -f https://docs.projectcalico.org/v3.1/getting-started/kubernetes/installation/hosted/rbac-kdd.yaml
     kubectl apply -f https://docs.projectcalico.org/v3.1/getting-started/kubernetes/installation/hosted/kubernetes-datastore/calico-networking/1.7/calico.yaml
 
-    kubeadm token create --print-join-command >> /etc/kubeadm_tokens.txt
+    kubeadm token create --print-join-command >> /etc/kubeadm_join_cmd.txt
+
+    # required for setting up password less ssh between guest VMs
+    sudo sed -i "/^[^#]*PasswordAuthentication[[:space:]]no/c\PasswordAuthentication yes" /etc/ssh/sshd_config
+    sudo service sshd restart
+
 SCRIPT
 
 $configureNode = <<-SCRIPT
     echo "This is worker"
+
+    # add worker's public key to master's authorized keys for password-less ssh
+    apt-get install -y sshpass
+    sshpass -p "vagrant" ssh-copy-id -i $HOME/.ssh/id_rsa.pub vagrant@192.168.205.10
 SCRIPT
 
 Vagrant.configure("2") do |config|
