@@ -3,7 +3,7 @@
 
 servers = [
     {
-        :name => "k8s-head",
+        :name => "k8s-mstr-0",
         :type => "master",
         :box => "ubuntu/xenial64",
         :box_version => "20180831.0.0",
@@ -12,11 +12,20 @@ servers = [
         :cpu => "2"
     },
     {
+        :name => "k8s-mstr-1",
+        :type => "master",
+        :box => "ubuntu/xenial64",
+        :box_version => "20180831.0.0",
+        :eth1 => "192.168.205.11",
+        :mem => "2048",
+        :cpu => "2"
+    },
+    {
         :name => "k8s-node-1",
         :type => "node",
         :box => "ubuntu/xenial64",
         :box_version => "20180831.0.0",
-        :eth1 => "192.168.205.11",
+        :eth1 => "192.168.205.12",
         :mem => "2048",
         :cpu => "2"
     },
@@ -25,7 +34,7 @@ servers = [
         :type => "node",
         :box => "ubuntu/xenial64",
         :box_version => "20180831.0.0",
-        :eth1 => "192.168.205.12",
+        :eth1 => "192.168.205.13",
         :mem => "2048",
         :cpu => "2"
     }
@@ -40,7 +49,7 @@ $configureBox = <<-SCRIPT
     apt-get install -y apt-transport-https ca-certificates curl software-properties-common
     curl -fsSL https://download.docker.com/linux/ubuntu/gpg | apt-key add -
     add-apt-repository "deb https://download.docker.com/linux/$(. /etc/os-release; echo "$ID") $(lsb_release -cs) stable"
-    apt-get update && apt-get install -y docker-ce=$(apt-cache madison docker-ce | grep 17.03 | head -1 | awk '{print $3}')
+    apt-get update && apt-get install -y docker-ce
 
     # run docker commands as vagrant user (sudo not required)
     usermod -aG docker vagrant
@@ -72,10 +81,31 @@ $configureMaster = <<-SCRIPT
     echo "This is master"
     # ip of this box
     IP_ADDR=`ifconfig enp0s8 | grep Mask | awk '{print $2}'| cut -f2 -d:`
-
+    
     # install k8s master
     HOST_NAME=$(hostname -s)
-    kubeadm init --apiserver-advertise-address=$IP_ADDR --apiserver-cert-extra-sans=$IP_ADDR  --node-name $HOST_NAME --pod-network-cidr=172.16.0.0/16
+    if [ "$HOST_NAME" = "k8s-mstr-0" ]; then
+        apt-get install -y nginx
+        cat <<EOF > /etc/nginx/kube_api.conf
+stream {
+    server {
+        listen 192.168.205.10:123;
+        proxy_pass api_server;
+    }
+
+    upstream api_server {
+        server 192.168.205.10:6443;
+    }
+}
+EOF
+        grep kube_api.conf /etc/nginx/nginx.conf
+        if [ $? -eq 1 ]; then   echo 'include /etc/nginx/kube_api.conf;' >> /etc/nginx/nginx.conf; fi
+        systemctl enable nginx
+        systemctl restart nginx
+        kubeadm init --apiserver-advertise-address=$IP_ADDR --apiserver-cert-extra-sans=$IP_ADDR  --node-name $HOST_NAME --pod-network-cidr=172.24.0.0/16 --control-plane-endpoint $IP_ADDR:123 --upload-certs
+    else
+        kubeadm join 192.168.205.10:123 --apiserver-advertise-address=$IP_ADDR --node-name $HOST_NAME --token idfz64.go2vqhgtzeoe7r4u  --discovery-token-ca-cert-hash sha256:872f0728a647da94cb17e0a7b44726859b93c9f3cd5bb1a5658c44af77b2723d --control-plane --certificate-key 2e0765fca27b5881c12278311b71e6ef0c71da8b46eb33dca1be99cd290e4e88
+    fi
 
     #copying credentials to regular user - vagrant
     sudo --user=vagrant mkdir -p /home/vagrant/.kube
@@ -84,11 +114,10 @@ $configureMaster = <<-SCRIPT
 
     # install Calico pod network addon
     export KUBECONFIG=/etc/kubernetes/admin.conf
-    kubectl apply -f https://raw.githubusercontent.com/ecomm-integration-ballerina/kubernetes-cluster/master/calico/rbac-kdd.yaml
-    kubectl apply -f https://raw.githubusercontent.com/ecomm-integration-ballerina/kubernetes-cluster/master/calico/calico.yaml
-
-    kubeadm token create --print-join-command >> /etc/kubeadm_join_cmd.sh
-    chmod +x /etc/kubeadm_join_cmd.sh
+    if [ "$HOST_NAME" = "k8s-mstr-0" ]; then
+        kubeadm token create --print-join-command >> /etc/kubeadm_join_cmd.sh
+        chmod +x /etc/kubeadm_join_cmd.sh
+    fi
 
     # required for setting up password less ssh between guest VMs
     sudo sed -i "/^[^#]*PasswordAuthentication[[:space:]]no/c\PasswordAuthentication yes" /etc/ssh/sshd_config
@@ -112,11 +141,13 @@ Vagrant.configure("2") do |config|
             config.vm.box_version = opts[:box_version]
             config.vm.hostname = opts[:name]
             config.vm.network :private_network, ip: opts[:eth1]
+            config.vm.synced_folder ".", "/vagrant-service"
+            config.vm.provision :hosts, :sync_hosts => true
 
             config.vm.provider "virtualbox" do |v|
 
                 v.name = opts[:name]
-            	 v.customize ["modifyvm", :id, "--groups", "/Ballerina Development"]
+            	v.customize ["modifyvm", :id, "--groups", "/Ballerina Development"]
                 v.customize ["modifyvm", :id, "--memory", opts[:mem]]
                 v.customize ["modifyvm", :id, "--cpus", opts[:cpu]]
 
@@ -129,10 +160,9 @@ Vagrant.configure("2") do |config|
 
             if opts[:type] == "master"
                 config.vm.provision "shell", inline: $configureMaster
-            else
+            elsif opts[:type] == "node"
                 config.vm.provision "shell", inline: $configureNode
             end
-
         end
 
     end

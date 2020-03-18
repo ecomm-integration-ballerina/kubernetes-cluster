@@ -1,1 +1,3 @@
 .vagrant/
+*.log
+intro-to-k8s/
