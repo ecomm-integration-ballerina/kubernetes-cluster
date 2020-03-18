@@ -1,3 +1,10 @@
 .vagrant/
 *.log
 intro-to-k8s/
+kubeadm_join_cmd.sh
+cert-key
+microservices-demo
+load-test
+locustio
+examples
+ovs-pkgs

@@ -6,7 +6,6 @@ servers = [
         :name => "k8s-mstr-0",
         :type => "master",
         :box => "ubuntu/xenial64",
-        :box_version => "20180831.0.0",
         :eth1 => "192.168.205.10",
         :mem => "2048",
         :cpu => "2"
@@ -15,7 +14,6 @@ servers = [
         :name => "k8s-mstr-1",
         :type => "master",
         :box => "ubuntu/xenial64",
-        :box_version => "20180831.0.0",
         :eth1 => "192.168.205.11",
         :mem => "2048",
         :cpu => "2"
@@ -24,27 +22,22 @@ servers = [
         :name => "k8s-node-1",
         :type => "node",
         :box => "ubuntu/xenial64",
-        :box_version => "20180831.0.0",
         :eth1 => "192.168.205.12",
-        :mem => "2048",
+        :mem => "4096",
         :cpu => "2"
     },
     {
         :name => "k8s-node-2",
         :type => "node",
         :box => "ubuntu/xenial64",
-        :box_version => "20180831.0.0",
         :eth1 => "192.168.205.13",
-        :mem => "2048",
+        :mem => "4096",
         :cpu => "2"
     }
 ]
 
 # This script to install k8s using kubeadm will get executed after a box is provisioned
 $configureBox = <<-SCRIPT
-
-    # install docker v17.03
-    # reason for not using docker provision is that it always installs latest version of the docker, but kubeadm requires 17.03 or older
     apt-get update
     apt-get install -y apt-transport-https ca-certificates curl software-properties-common
     curl -fsSL https://download.docker.com/linux/ubuntu/gpg | apt-key add -
@@ -60,6 +53,11 @@ $configureBox = <<-SCRIPT
     cat <<EOF >/etc/apt/sources.list.d/kubernetes.list
     deb http://apt.kubernetes.io/ kubernetes-xenial main
 EOF
+    cat <<EOF > /etc/sysctl.d/k8s.conf
+net.bridge.bridge-nf-call-ip6tables = 1
+net.bridge.bridge-nf-call-iptables = 1
+EOF
+    sysctl --system
     apt-get update
     apt-get install -y kubelet kubeadm kubectl
     apt-mark hold kubelet kubeadm kubectl
@@ -73,7 +71,6 @@ EOF
     # ip of this box
     IP_ADDR=`ifconfig enp0s8 | grep Mask | awk '{print $2}'| cut -f2 -d:`
     # set node-ip
-    sudo sed -i "/^[^#]*KUBELET_EXTRA_ARGS=/c\KUBELET_EXTRA_ARGS=--node-ip=$IP_ADDR" /etc/default/kubelet
     sudo systemctl restart kubelet
 SCRIPT
 
@@ -95,6 +92,7 @@ stream {
 
     upstream api_server {
         server 192.168.205.10:6443;
+        server 192.168.205.11:6443;
     }
 }
 EOF
@@ -103,8 +101,12 @@ EOF
         systemctl enable nginx
         systemctl restart nginx
         kubeadm init --apiserver-advertise-address=$IP_ADDR --apiserver-cert-extra-sans=$IP_ADDR  --node-name $HOST_NAME --pod-network-cidr=172.24.0.0/16 --control-plane-endpoint $IP_ADDR:123 --upload-certs
+        sleep 3
+        kubeadm init phase upload-certs --upload-certs | grep -v upload-certs > /vagrant-service/cert-key
     else
-        kubeadm join 192.168.205.10:123 --apiserver-advertise-address=$IP_ADDR --node-name $HOST_NAME --token idfz64.go2vqhgtzeoe7r4u  --discovery-token-ca-cert-hash sha256:872f0728a647da94cb17e0a7b44726859b93c9f3cd5bb1a5658c44af77b2723d --control-plane --certificate-key 2e0765fca27b5881c12278311b71e6ef0c71da8b46eb33dca1be99cd290e4e88
+        CA_CERT_HASH=$(cat /vagrant-service/cert-key)
+        JOIN_COMMAND=$(cat /vagrant-service/kubeadm_join_cmd.sh)
+        $JOIN_COMMAND --control-plane --apiserver-advertise-address=$IP_ADDR --node-name $HOST_NAME --certificate-key $CA_CERT_HASH 
     fi
 
     #copying credentials to regular user - vagrant
@@ -112,24 +114,20 @@ EOF
     cp -i /etc/kubernetes/admin.conf /home/vagrant/.kube/config
     chown $(id -u vagrant):$(id -g vagrant) /home/vagrant/.kube/config
 
-    # install Calico pod network addon
-    export KUBECONFIG=/etc/kubernetes/admin.conf
     if [ "$HOST_NAME" = "k8s-mstr-0" ]; then
-        kubeadm token create --print-join-command >> /etc/kubeadm_join_cmd.sh
-        chmod +x /etc/kubeadm_join_cmd.sh
+        kubeadm token create --print-join-command > /vagrant-service/kubeadm_join_cmd.sh
+        export KUBECONFIG=/etc/kubernetes/admin.conf
+        kubectl completion bash > /home/vagrant/.kube/completion.bash.inc
+        echo "source '/home/vagrant/.kube/completion.bash.inc'" >> /home/vagrant/.bashrc
+        chown vagrant:vagrant /home/vagrant/.kube/completion.bash.inc
+        chmod +x /vagrant-service/kubeadm_join_cmd.sh
     fi
-
-    # required for setting up password less ssh between guest VMs
-    sudo sed -i "/^[^#]*PasswordAuthentication[[:space:]]no/c\PasswordAuthentication yes" /etc/ssh/sshd_config
-    sudo service sshd restart
 
 SCRIPT
 
 $configureNode = <<-SCRIPT
     echo "This is worker"
-    apt-get install -y sshpass
-    sshpass -p "vagrant" scp -o StrictHostKeyChecking=no vagrant@192.168.205.10:/etc/kubeadm_join_cmd.sh .
-    sh ./kubeadm_join_cmd.sh
+    sh /vagrant-service/kubeadm_join_cmd.sh
 SCRIPT
 
 Vagrant.configure("2") do |config|
@@ -138,7 +136,6 @@ Vagrant.configure("2") do |config|
         config.vm.define opts[:name] do |config|
 
             config.vm.box = opts[:box]
-            config.vm.box_version = opts[:box_version]
             config.vm.hostname = opts[:name]
             config.vm.network :private_network, ip: opts[:eth1]
             config.vm.synced_folder ".", "/vagrant-service"
@@ -157,14 +154,11 @@ Vagrant.configure("2") do |config|
             #config.vm.provision "docker"
 
             config.vm.provision "shell", inline: $configureBox
-
             if opts[:type] == "master"
                 config.vm.provision "shell", inline: $configureMaster
             elsif opts[:type] == "node"
                 config.vm.provision "shell", inline: $configureNode
             end
         end
-
     end
-
 end 
