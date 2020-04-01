@@ -8,13 +8,13 @@ A vagrant script for setting up a Kubernetes cluster using Kubeadm
 
 ## How to Run
 
-Execute the following vagrant command to start a new Kubernetes cluster, this will start one master and two nodes:
+Execute the following vagrant command to start a new Kubernetes cluster, this will start two masters and two nodes. This can be customized by reviewing the server array in the Vagrantfile. When you run the following command all servers defined in the list will be provisioned :
 
 ```
 vagrant up
 ```
 
-You can also start invidual machines by vagrant up k8s-head, vagrant up k8s-node-1 and vagrant up k8s-node-2
+You can also start invidual machines by vagrant up followed by the machine, vagrant status will let you see the name's of the machines.
 
 If more than two nodes are required, you can edit the servers array in the Vagrantfile
 
@@ -33,6 +33,14 @@ servers = [
  ```
 
 As you can see above, you can also configure IP address, memory and CPU in the servers array. 
+
+There will be 2 masters and 2 nodes of which the master is running nginx as reverse proxy for kubelets and kubectl. The set up is fairly simple to get up and running.
+
+Make sure you install the network components to allow all nodes to be ready. This is because they will not enter the ready state without network services being provisioned accordingly:
+
+```
+kubectl apply -f /vagrant-service/network/
+```
 
 ## Clean-up
 
